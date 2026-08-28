@@ -63,7 +63,6 @@ if uploaded_files:
         current_body = []
         in_header = True
 
-        # 1. 解析 Header 與 Body
         for line in lines:
             line_str = line.strip()
             if not line_str:
@@ -75,7 +74,7 @@ if uploaded_files:
 
             if in_header:
                 header_lines.append(line_str)
-                # 相容 C1.、C1.0、C-1.0 等多種寫法
+                # 相容 C1.、C1.0、C-1.0 等寫法
                 match_t = re.search(r"T(\d+)C(-?\d+(?:\.\d*)?)", line_str, re.IGNORECASE)
                 if match_t:
                     t_num = f"T{int(match_t.group(1)):02d}"
@@ -83,7 +82,6 @@ if uploaded_files:
                     header_c_vals[t_num] = abs(c_val)
                     header_has_r_tag[t_num] = ("(R)" in line_str.upper()) or (c_val < 0)
             else:
-                # 彈性切分刀號 (如 T01、T02)
                 match_t = re.match(r'^T(\d+)', line_str, re.IGNORECASE)
                 if match_t:
                     if current_t is not None:
@@ -97,18 +95,16 @@ if uploaded_files:
         if current_t is not None:
             raw_tool_blocks.append((current_t, current_body))
 
-        # 剔除刪除刀號
         if enable_delete_tool and delete_tool_code:
             raw_tool_blocks = [tb for tb in raw_tool_blocks if tb[0] != delete_tool_code]
 
-        # 2. 精準判定 Routing 刀
         analyzed_tools = {}
         drill_list = []
         rout_list = []
 
         for t_code, body in raw_tool_blocks:
-            # 檢查 Body 內是否有 G00/G01/G02/G03 切削指令
-            has_g_code = any(re.search(r'G0?[0-3]', l, re.IGNORECASE) for l in body)
+            # 修正關鍵：嚴格匹配 G00~G03 或 G0~G3，且後面不能直接接數字 (避免誤抓 G05)
+            has_g_code = any(re.search(r'G(00|01|02|03|0|1|2|3)(?!\d)', l, re.IGNORECASE) for l in body)
             
             is_rout = header_has_r_tag.get(t_code, False) or has_g_code
             c_val = header_c_vals.get(t_code, 1.0)
@@ -124,7 +120,6 @@ if uploaded_files:
             else:
                 drill_list.append(t_code)
 
-        # 3. UI 狀態呈現
         st.success(f"✅ 成功載入檔案：{uploaded_file.name}")
         st.info(f"🔍 自動識別結果：鑽孔刀 {len(drill_list)} 支，Routing 刀 {len(rout_list)} 支")
 
@@ -143,7 +138,6 @@ if uploaded_files:
 
         st.markdown("---")
 
-        # 4. 組裝輸出 NC 碼
         x_dist_str = format_distance(x_step_distance)
         y_dist_str = format_distance(y_step_distance)
         
@@ -154,7 +148,6 @@ if uploaded_files:
             f"R{y_step_count}M02Y{y_dist_str}\n"
         ]
 
-        # 重新生成 Header：確認為 Routing 刀才加負號與 (R)
         final_header = []
         for line in header_lines:
             match_t = re.search(r"T(\d+)C(-?\d+(?:\.\d*)?)", line, re.IGNORECASE)
