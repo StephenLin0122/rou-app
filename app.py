@@ -103,7 +103,7 @@ if uploaded_files:
         rout_list = []
 
         for t_code, body in raw_tool_blocks:
-            # 修正關鍵：嚴格匹配 G00~G03 或 G0~G3，且後面不能直接接數字 (避免誤抓 G05)
+            # 嚴格匹配 G00~G03，且後面不能直接接數字 (避免誤抓 G05 等)
             has_g_code = any(re.search(r'G(00|01|02|03|0|1|2|3)(?!\d)', l, re.IGNORECASE) for l in body)
             
             is_rout = header_has_r_tag.get(t_code, False) or has_g_code
@@ -126,15 +126,27 @@ if uploaded_files:
         dir_tool_option = st.selectbox(f"🎯 選擇套 pin 鑽頭 ({uploaded_file.name})", ["T01", "無"], index=0)
 
         st.markdown("---")
+        
+        # 紀錄每支刀號是否要執行跳模陣列
+        tool_options_state = {}
+
         st.markdown("**[鑽孔刀具 - 將自動進行同尺寸合併]**")
         for t_code in drill_list:
             c_v = analyzed_tools[t_code]["c_val"]
-            st.checkbox(f"{t_code} (C{c_v:.1f}) → 套用鑽孔跳模", value=True, key=f"d_{t_code}_{uploaded_file.name}")
+            if t_code == dir_tool_option:
+                st.checkbox(f"{t_code} (C{c_v:.1f}) → 🎯 已設為套 Pin 鑽頭 (一律不跳模)", value=False, disabled=True, key=f"d_{t_code}_{uploaded_file.name}")
+                tool_options_state[t_code] = False
+            else:
+                tool_options_state[t_code] = st.checkbox(f"{t_code} (C{c_v:.1f}) → 套用鑽孔跳模", value=True, key=f"d_{t_code}_{uploaded_file.name}")
 
         st.markdown("\n**[Routing 刀具 - 維持獨立刀號與 M25 跳模/雙進給]**")
         for t_code in rout_list:
             c_v = analyzed_tools[t_code]["c_val"]
-            st.checkbox(f"{t_code} (C-{c_v:.1f}) → 套用 Routing M25 雙進給跳模", value=True, key=f"r_{t_code}_{uploaded_file.name}")
+            if t_code == dir_tool_option:
+                st.checkbox(f"{t_code} (C-{c_v:.1f}) → 🎯 已設為套 Pin 鑽頭 (一律不跳模)", value=False, disabled=True, key=f"r_{t_code}_{uploaded_file.name}")
+                tool_options_state[t_code] = False
+            else:
+                tool_options_state[t_code] = st.checkbox(f"{t_code} (C-{c_v:.1f}) → 套用 Routing M25 雙進給跳模", value=True, key=f"r_{t_code}_{uploaded_file.name}")
 
         st.markdown("---")
 
@@ -180,6 +192,7 @@ if uploaded_files:
                 "body": t01_coords_list,
                 "is_rout": False
             })
+            tool_options_state["T01"] = False
 
         for t_code, info in analyzed_tools.items():
             cleaned_body = clean_block_lines(info["body"])
@@ -194,27 +207,34 @@ if uploaded_files:
             t_code = blk["t_code"]
             body = blk["body"]
             is_rout = blk["is_rout"]
+            is_pin_tool = (t_code == dir_tool_option)
+            do_step_repeat = tool_options_state.get(t_code, True)
 
             is_next = (idx + 1 < total_len)
-            end_code = "M47" if is_next else "M30"
+            
+            # 如果是套 Pin 鑽頭，強制使用 M30 停止機台；否則依序判斷 M47/M30
+            if is_pin_tool:
+                end_code = "M30"
+            else:
+                end_code = "M47" if is_next else "M30"
 
             if is_rout:
                 new_lines.append(f"{t_code}\n")
                 new_lines.append("F006\n")
                 new_lines.append("M25\n")
                 if body: new_lines.append("\n".join(body) + "\n")
-                new_lines.extend(step_repeat_block)
+                if do_step_repeat: new_lines.extend(step_repeat_block)
                 new_lines.append("M08\n")
                 new_lines.append("\nF016\n")
                 new_lines.append("M25\n")
                 if body: new_lines.append("\n".join(body) + "\n")
-                new_lines.extend(step_repeat_block)
+                if do_step_repeat: new_lines.extend(step_repeat_block)
                 new_lines.append("M08\n")
                 new_lines.append(f"{end_code}\n\n")
             else:
                 new_lines.append(f"{t_code}\n")
                 if body: new_lines.append("\n".join(body) + "\n")
-                new_lines.extend(step_repeat_block)
+                if do_step_repeat: new_lines.extend(step_repeat_block)
                 new_lines.append("M08\n")
                 new_lines.append(f"{end_code}\n\n")
 
