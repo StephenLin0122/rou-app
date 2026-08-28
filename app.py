@@ -63,7 +63,7 @@ if uploaded_files:
         current_body = []
         in_header = True
 
-        # 步驟 1：純解析 Header 與 Body，不在此處做任何格式修改
+        # 1. 解析 Header 與 Body
         for line in lines:
             line_str = line.strip()
             if not line_str:
@@ -75,19 +75,20 @@ if uploaded_files:
 
             if in_header:
                 header_lines.append(line_str)
-                # 解析標頭中的 T 與 C 值
-                match_t = re.search(r"T(\d+)C(-?\d+(\.\d+)?)", line_str, re.IGNORECASE)
+                # 相容 C1.、C1.0、C-1.0 等多種寫法
+                match_t = re.search(r"T(\d+)C(-?\d+(?:\.\d*)?)", line_str, re.IGNORECASE)
                 if match_t:
                     t_num = f"T{int(match_t.group(1)):02d}"
                     c_val = float(match_t.group(2))
-                    header_c_vals[t_num] = abs(c_val) # 全部取絕對值純數值
+                    header_c_vals[t_num] = abs(c_val)
                     header_has_r_tag[t_num] = ("(R)" in line_str.upper()) or (c_val < 0)
             else:
-                match_t = re.match(r'^(T\d+)\s*$', line_str, re.IGNORECASE)
+                # 彈性切分刀號 (如 T01、T02)
+                match_t = re.match(r'^T(\d+)', line_str, re.IGNORECASE)
                 if match_t:
                     if current_t is not None:
                         raw_tool_blocks.append((current_t, current_body))
-                    current_t = f"T{int(re.sub(r'^\D+', '', match_t.group(1))):02d}"
+                    current_t = f"T{int(match_t.group(1)):02d}"
                     current_body = []
                 else:
                     if current_t is not None:
@@ -96,20 +97,19 @@ if uploaded_files:
         if current_t is not None:
             raw_tool_blocks.append((current_t, current_body))
 
-        # 剔除指定刪除刀號
+        # 剔除刪除刀號
         if enable_delete_tool and delete_tool_code:
             raw_tool_blocks = [tb for tb in raw_tool_blocks if tb[0] != delete_tool_code]
 
-        # 步驟 2：核心判定 — 檢查 Body 內是否有 G00~G03 切削路徑
+        # 2. 精準判定 Routing 刀
         analyzed_tools = {}
         drill_list = []
         rout_list = []
 
         for t_code, body in raw_tool_blocks:
-            # 檢查內文中是否有切削路徑指令
-            has_g_code = any(re.search(r'G0?[0-3]', l, re.IGNORECASE) for l in body)
+            # 檢查 Body 內是否有 G00/G01/G02/G03 切削指令[cite: 1]
+            has_g_code = any(re.search(r'G0?[0-3]', l, re.IGNORECASE) for l in body)[cite: 1]
             
-            # 判定邏輯：內文有 G 碼 或 標頭原始有 (R) / 負 C 值
             is_rout = header_has_r_tag.get(t_code, False) or has_g_code
             c_val = header_c_vals.get(t_code, 1.0)
 
@@ -124,7 +124,7 @@ if uploaded_files:
             else:
                 drill_list.append(t_code)
 
-        # 步驟 3：顯示 UI 識別成果
+        # 3. UI 狀態呈現
         st.success(f"✅ 成功載入檔案：{uploaded_file.name}")
         st.info(f"🔍 自動識別結果：鑽孔刀 {len(drill_list)} 支，Routing 刀 {len(rout_list)} 支")
 
@@ -143,7 +143,7 @@ if uploaded_files:
 
         st.markdown("---")
 
-        # 步驟 4：重組 Header (確認是 Routing 刀後，才加負號與 (R))
+        # 4. 組裝輸出 NC 碼
         x_dist_str = format_distance(x_step_distance)
         y_dist_str = format_distance(y_step_distance)
         
@@ -154,9 +154,10 @@ if uploaded_files:
             f"R{y_step_count}M02Y{y_dist_str}\n"
         ]
 
+        # 重新生成 Header：確認為 Routing 刀才加負號與 (R)
         final_header = []
         for line in header_lines:
-            match_t = re.search(r"T(\d+)C(-?\d+(\.\d+)?)", line, re.IGNORECASE)
+            match_t = re.search(r"T(\d+)C(-?\d+(?:\.\d*)?)", line, re.IGNORECASE)
             if match_t:
                 t_code = f"T{int(match_t.group(1)):02d}"
                 if enable_delete_tool and delete_tool_code and t_code == delete_tool_code:
@@ -165,10 +166,8 @@ if uploaded_files:
                 info = analyzed_tools.get(t_code)
                 if info:
                     if info["is_rout"]:
-                        # 判定為 Routing 刀 -> 加負號與 (R)
                         final_header.append(f"{t_code}C-{info['c_val']:.1f}(R)")
                     else:
-                        # 判定為鑽孔刀 -> 保持正數，不加 (R)
                         final_header.append(f"{t_code}C{info['c_val']:.1f}")
                 else:
                     final_header.append(line)
@@ -178,7 +177,6 @@ if uploaded_files:
         new_lines = [l + "\n" for l in final_header]
         new_lines.append("%\n")
 
-        # 步驟 5：輸出 Body 區塊
         output_blocks = []
         has_t01 = ("T01" in analyzed_tools)
 
