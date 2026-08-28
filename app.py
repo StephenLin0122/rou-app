@@ -1,24 +1,25 @@
 import streamlit as st
 import re
 
-st.set_page_config(page_title="ROU 檔案自動轉檔工具", page_icon="⚙️", layout="centered")
+st.set_page_config(page_title="NC 碼轉檔器", page_icon="⚙️", layout="wide")
 
-st.title("⚙️ ROU 檔案自動轉檔工具")
-st.markdown("無需登入帳號，上傳 `.rou` / `.drl` 檔案即可自動轉換並下載。")
+st.title("⚙️ NC 碼轉換器 - 跳模陣列與雙進給處理")
+st.markdown("不用登入即可直接上傳 NC / ROU 檔進行雙速切削與跳模轉檔。")
 
-st.sidebar.header("🔧 轉檔參數設定")
+# 側邊欄設定區
+st.sidebar.header("🔧 跳模與刀具參數設定")
 
-dir_hole_tool = st.sidebar.selectbox("1. 方向孔鑽頭設定", ["T01", "無"])
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("2. X 方向跳模參數")
-x_step_count = st.sidebar.number_input("X 軸跳模數 (aa)", min_value=1, value=20, step=1)
-x_step_distance = st.sidebar.number_input("X 間距 mm (bbb)", min_value=0.0, value=14.1, step=0.1)
+dir_tool_option = st.sidebar.selectbox("1. 選擇套 pin 鑽頭", ["T01", "無"], index=0)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("3. Y 方向跳模參數")
-y_step_count = st.sidebar.number_input("Y 軸跳模數 (aa)", min_value=1, value=6, step=1)
-y_step_distance = st.sidebar.number_input("Y 間距 mm (bbb)", min_value=0.0, value=59.6, step=0.1)
+st.sidebar.subheader("2. X 方向跳模參數 (R[aa]M02X[bbb])")
+x_step_count = st.sidebar.number_input("X 軸跳模數 (aa)", min_value=1, value=13, step=1)
+x_step_distance = st.sidebar.number_input("X 間距 mm (bbb)", min_value=0.0, value=18.2, step=0.1)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("3. Y 方向跳模參數 (R[aa]M02Y[bbb])")
+y_step_count = st.sidebar.number_input("Y 軸跳模數 (aa)", min_value=1, value=8, step=1)
+y_step_distance = st.sidebar.number_input("Y 間距 mm (bbb)", min_value=0.0, value=46.2, step=0.1)
 
 def format_distance(val):
     val_int = int(round(val * 10))
@@ -169,17 +170,17 @@ def process_rou_content(lines, dir_tool_option, x_count, x_dist, y_count, y_dist
 
     return "".join(new_lines)
 
-uploaded_files = st.file_uploader("📁 請選擇或拖曳要轉換的 NC / ROU 檔案", accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 選擇並載入 NC / ROU 檔案", accept_multiple_files=True)
 
 if uploaded_files:
-    st.success(f"已上傳 {len(uploaded_files)} 個檔案，點擊下方按鈕即可下載轉檔結果：")
+    st.success(f"已成功載入 {len(uploaded_files)} 個檔案，設定參數後即可點擊下載：")
     for uploaded_file in uploaded_files:
         content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
         lines = content.splitlines(keepends=True)
         
         result_text = process_rou_content(
             lines, 
-            dir_hole_tool, 
+            dir_tool_option, 
             x_step_count, 
             x_step_distance, 
             y_step_count, 
@@ -188,9 +189,14 @@ if uploaded_files:
         
         output_filename = "modified_" + uploaded_file.name
         
-        st.download_button(
-            label=f"⬇️ 下載 {output_filename}",
-            data=result_text,
-            file_name=output_filename,
-            mime="text/plain"
-        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.text(f"📄 準備完成：{output_filename}")
+        with col2:
+            st.download_button(
+                label=f"⬇️ 下載轉檔",
+                data=result_text,
+                file_name=output_filename,
+                mime="text/plain",
+                key=uploaded_file.name
+            )
