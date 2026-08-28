@@ -55,13 +55,15 @@ if uploaded_files:
         lines = content.splitlines(keepends=True)
         
         header_lines = []
-        tool_blocks = []
-        header_tools = {} # 紀錄標頭定義的刀號與原始字串/C值
+        raw_tool_blocks = []
+        header_c_vals = {}
+        header_r_flags = {}
         
-        current_t_code = None
+        current_t = None
         current_body = []
         in_header = True
 
+        # 1. 逐行剖析 Header 與內文 Block
         for line in lines:
             line_str = line.strip()
             if not line_str:
@@ -73,74 +75,72 @@ if uploaded_files:
 
             if in_header:
                 header_lines.append(line_str)
-                # 正確匹配 C 後面可能帶有的負號
-                match_header_t = re.search(r"^(T\d+)C(-?\d+(\.\d+)?)", line_str, re.IGNORECASE)
-                if match_header_t:
-                    t_id = f"T{int(re.sub(r'^\D+', '', match_header_t.group(1))):02d}"
-                    c_val = float(match_header_t.group(2))
-                    is_rout_header = ("(R)" in line_str.upper()) or (c_val < 0)
-                    header_tools[t_id] = {
-                        "c_val": c_val,
-                        "raw_line": line_str,
-                        "is_rout": is_rout_header
-                    }
+                # 抓取 TxxC... 語法
+                match_t = re.search(r"T(\d+)C(-?\d+(\.\d+)?)", line_str, re.IGNORECASE)
+                if match_t:
+                    t_num = f"T{int(match_t.group(1)):02d}"
+                    c_val = float(match_t.group(2))
+                    header_c_vals[t_num] = c_val
+                    header_r_flags[t_num] = "(R)" in line_str.upper() or c_val < 0
             else:
                 match_t = re.match(r'^(T\d+)\s*$', line_str, re.IGNORECASE)
                 if match_t:
-                    if current_t_code is not None:
-                        tool_blocks.append((current_t_code, current_body))
-                    current_t_code = match_t.group(1).upper()
+                    if current_t is not None:
+                        raw_tool_blocks.append((current_t, current_body))
+                    current_t = f"T{int(re.sub(r'^\D+', '', match_t.group(1))):02d}"
                     current_body = []
                 else:
-                    if current_t_code is not None:
+                    if current_t is not None:
                         current_body.append(line_str)
 
-        if current_t_code is not None:
-            tool_blocks.append((current_t_code, current_body))
+        if current_t is not None:
+            raw_tool_blocks.append((current_t, current_body))
 
-        # 剔除要刪除的刀具
+        # 剔除指定刪除刀號
         if enable_delete_tool and delete_tool_code:
-            tool_blocks = [tb for tb in tool_blocks if f"T{int(re.sub(r'^\D+', '', tb[0])):02d}" != delete_tool_code]
+            raw_tool_blocks = [tb for tb in raw_tool_blocks if tb[0] != delete_tool_code]
 
-        # 綜合標頭與內文 (是否有 G 碼) 來判斷是否為 Routing 刀
+        # 2. 核心判斷：是否為 Routing 刀 (檢查標頭或內文是否有 G00/G01/G02/G03)
         analyzed_tools = {}
-        for t_code, body in tool_blocks:
-            t_std = f"T{int(re.sub(r'^\D+', '', t_code)):02d}"
-            
-            # 檢查內文中是否有 G01/G02/G03/G00 命令
-            has_g_code = any(re.search(r"G0?[0-3]", line, re.IGNORECASE) for line in body)
-            
-            header_info = header_tools.get(t_std, {"c_val": 1.0, "is_rout": False})
-            is_rout = header_info["is_rout"] or has_g_code
-            
-            analyzed_tools[t_std] = {
+        drill_list = []
+        rout_list = []
+
+        for t_code, body in raw_tool_blocks:
+            has_g_code = any(re.search(r'G0?[0-3]', l, re.IGNORECASE) for l in body)
+            is_rout = header_r_flags.get(t_code, False) or has_g_code
+            c_val = abs(header_c_vals.get(t_code, 1.0))
+
+            analyzed_tools[t_code] = {
                 "body": body,
-                "c_val": header_info["c_val"],
+                "c_val": c_val,
                 "is_rout": is_rout
             }
 
-        drill_tools = [t for t, info in analyzed_tools.items() if not info["is_rout"]]
-        rout_tools = [t for t, info in analyzed_tools.items() if info["is_rout"]]
+            if is_rout:
+                rout_list.append(t_code)
+            else:
+                drill_list.append(t_code)
 
+        # 3. 顯示識別資訊與 UI 選擇
         st.success(f"✅ 成功載入檔案：{uploaded_file.name}")
-        st.info(f"🔍 自動識別結果：鑽孔刀 {len(drill_tools)} 支，Routing 刀 {len(rout_tools)} 支")
+        st.info(f"🔍 自動識別結果：鑽孔刀 {len(drill_list)} 支，Routing 刀 {len(rout_list)} 支")
 
         dir_tool_option = st.selectbox(f"🎯 選擇套 pin 鑽頭 ({uploaded_file.name})", ["T01", "無"], index=0)
 
         st.markdown("---")
-        
         st.markdown("**[鑽孔刀具 - 將自動進行同尺寸合併]**")
-        for t_code in drill_tools:
-            c_val = analyzed_tools[t_code]["c_val"]
-            st.checkbox(f"{t_code} (C{abs(c_val):.1f}) → 套用鑽孔跳模", value=True, key=f"d_{t_code}_{uploaded_file.name}")
+        for t_code in drill_list:
+            c_v = analyzed_tools[t_code]["c_val"]
+            st.checkbox(f"{t_code} (C{c_v:.1f}) → 套用鑽孔跳模", value=True, key=f"d_{t_code}_{uploaded_file.name}")
 
         st.markdown("\n**[Routing 刀具 - 維持獨立刀號與 M25 跳模/雙進給]**")
-        for t_code in rout_tools:
-            c_val = analyzed_tools[t_code]["c_val"]
-            st.checkbox(f"{t_code} (C-{abs(c_val):.1f}) → 套用 Routing M25 雙進給跳模", value=True, key=f"r_{t_code}_{uploaded_file.name}")
+        for t_code in rout_list:
+            c_v = analyzed_tools[t_code]["c_val"]
+            st.checkbox(f"{t_code} (C-{c_v:.1f}) → 套用 Routing M25 雙進給跳模", value=True, key=f"r_{t_code}_{uploaded_file.name}")
 
         st.markdown("---")
 
+        # 4. 組裝轉檔輸出 NC 碼
         x_dist_str = format_distance(x_step_distance)
         y_dist_str = format_distance(y_step_distance)
         
@@ -151,26 +151,23 @@ if uploaded_files:
             f"R{y_step_count}M02Y{y_dist_str}\n"
         ]
 
-        final_header_lines = []
+        final_header = []
         for line in header_lines:
-            match_t = re.search(r"^(T\d+)C(-?\d+(\.\d+)?)", line, re.IGNORECASE)
+            match_t = re.search(r"T(\d+)C(-?\d+(\.\d+)?)", line, re.IGNORECASE)
             if match_t:
-                t_num_raw = re.match(r"^T(\d+)", line, re.IGNORECASE).group(1)
-                t_code_formatted = f"T{int(t_num_raw):02d}"
-                
-                if enable_delete_tool and delete_tool_code and t_code_formatted == delete_tool_code:
+                t_code = f"T{int(match_t.group(1)):02d}"
+                if enable_delete_tool and delete_tool_code and t_code == delete_tool_code:
                     continue
-
-                tool_info = analyzed_tools.get(t_code_formatted)
-                if tool_info and tool_info["is_rout"]:
-                    val_str = f"{abs(tool_info['c_val']):.1f}"
-                    final_header_lines.append(f"{t_code_formatted}C-{val_str}(R)")
+                
+                info = analyzed_tools.get(t_code)
+                if info and info["is_rout"]:
+                    final_header.append(f"{t_code}C-{info['c_val']:.1f}(R)")
                 else:
-                    final_header_lines.append(line)
+                    final_header.append(line)
             else:
-                final_header_lines.append(line)
+                final_header.append(line)
 
-        new_lines = [line + "\n" for line in final_header_lines]
+        new_lines = [l + "\n" for l in final_header]
         new_lines.append("%\n")
 
         output_blocks = []
