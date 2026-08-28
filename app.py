@@ -27,13 +27,13 @@ st.markdown("---")
 
 uploaded_files = st.file_uploader("📂 1. 選擇並載入 NC 檔案", accept_multiple_files=True)
 
-# 格式化間距函式 (同 Colab 邏輯)
+# 格式化間距函式
 def format_distance_lz(val):
     val_int = int(round(val * 10))
     return f"{val_int:03d}" if val_int < 100 else f"{val_int:04d}"
 
 # ==========================================
-# 原版 Colab NC 解析邏輯 (完全對齊)
+# NC 解析邏輯 (含舊 R 跳模指令清理)
 # ==========================================
 def parse_raw_mixed_file(content):
     lines = content.splitlines()
@@ -89,12 +89,12 @@ def parse_raw_mixed_file(content):
                 raw_sections[current_t_code] = current_body
                 current_t_code = None
             else:
-                if line_str.upper() != 'M25':
+                # 關鍵修復：濾除 M25、M01 以及舊的 R[..]M02X/Y 跳模殘留指令
+                if line_str.upper() != 'M25' and line_str.upper() != 'M01' and not re.search(r'R\d+M02', line_str, re.IGNORECASE):
                     current_body.append(line_str)
     if current_t_code is not None:
         raw_sections[current_t_code] = current_body
 
-    # 原版關鍵判斷：同時有 M15 與 M17 才是 Routing 刀
     for t_code, b_lines in raw_sections.items():
         has_m15 = any('M15' in l.upper() for l in b_lines)
         has_m17 = any('M17' in l.upper() for l in b_lines)
@@ -114,7 +114,6 @@ if uploaded_files:
         st.success(f"✅ 成功載入檔案: {uploaded_file.name}")
         st.info(f"🔍 自動識別結果：鑽孔刀 {len(drill_tools)} 支，Routing 刀 {len(routing_tools)} 支")
 
-        # 🎯 選擇套 Pin 鑽頭選項
         pin_options = ["無 (不加 M30)"] + drill_tools
         selected_pin_str = st.selectbox(
             f"🎯 選擇套pin鑽頭 ({uploaded_file.name}):",
@@ -128,7 +127,6 @@ if uploaded_files:
         checkboxes = {}
         delete_checkboxes = {}
 
-        # 顯示鑽孔刀具勾選區
         if drill_tools:
             st.markdown("**[鑽孔刀具 - 將自動進行同尺寸合併]**")
             for t_code in drill_tools:
@@ -154,7 +152,6 @@ if uploaded_files:
                     else:
                         delete_checkboxes[t_code] = False
 
-        # 顯示 Routing 刀具勾選區
         if routing_tools:
             st.markdown("\n**[Routing 刀具 - 維持獨立刀號與 M25 跳模/雙進給]**")
             for t_code in routing_tools:
@@ -175,7 +172,6 @@ if uploaded_files:
 
         st.markdown("---")
 
-        # 執行轉換並準備下載
         if st.button("🚀 確定輸出 NC 碼", key=f"btn_gen_{uploaded_file.name}"):
             valid_drill_tools = [
                 t for t in drill_tools
@@ -197,7 +193,6 @@ if uploaded_files:
             merged_drill_blocks = {}
             merged_drill_is_slot = {}
 
-            # 同尺寸鑽孔刀合併處理
             for old_t in valid_drill_tools:
                 sz = raw_tool_sizes[old_t]
                 is_step = False if old_t == selected_pin_tool else checkboxes[old_t]
@@ -261,7 +256,6 @@ if uploaded_files:
             for idx, plan in enumerate(final_execution_plan):
                 new_t = plan['new_t']
                 p_type = plan['type']
-                is_last_item = (idx + 1 == total_plan_items)
 
                 new_lines.append(f"{new_t}\n")
 
@@ -295,6 +289,7 @@ if uploaded_files:
 
                 elif p_type == 'routing':
                     raw_lines, is_step = plan['lines'], plan['is_step']
+                    is_last_item = (idx + 1 == total_plan_items)
                     if not is_step:
                         for l in raw_lines: new_lines.append(l + "\n")
                     else:
